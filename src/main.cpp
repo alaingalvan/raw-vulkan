@@ -4,16 +4,24 @@
 #define VK_USE_PLATFORM_WIN32_KHR
 #define __INT32_TYPE__
 #define USE_SWAPCHAIN_EXTENSIONS
+
+#define GLM_FORCE_RADIANS
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE
+//#define GLM_FORCE_LEFT_HANDED
+
+#define DEFAULT_FENCE_TIMEOUT 100000000000
 #include "windows.h"
 
 #include "stdio.h"
 #include <chrono>
 #include <exception>
 #include <algorithm>
+#include <fstream>
 
 #include "vulkan/vulkan.hpp"
-#include "glm/vec3.hpp"
-#include "glm/mat4x4.hpp"
+
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 
 int main(const int argc, const char *argv[])
 {
@@ -482,27 +490,30 @@ int main(const int argc, const char *argv[])
 		)
 	);
 
+	auto depthMemoryReq = device.getImageMemoryRequirements(depthImage);
+
 	// Search through GPU memory properies to see if this can be device local.
 
-	auto depthMemoryReq = device.getImageMemoryRequirements(depthImage);
-	uint32_t typeBits = depthMemoryReq.memoryTypeBits;
-	uint32_t depthMemoryTypeIndex;
-
-	for (uint32_t i = 0; i < gpuMemoryProps.memoryTypeCount; i++)
+	auto getMemoryTypeIndex = [&](uint32_t typeBits, vk::MemoryPropertyFlags properties)
 	{
-		if ((typeBits & 1) == 1)
+		for (uint32_t i = 0; i < gpuMemoryProps.memoryTypeCount; i++)
 		{
-			if ((gpuMemoryProps.memoryTypes[i].propertyFlags & vk::MemoryPropertyFlagBits::eDeviceLocal) == vk::MemoryPropertyFlagBits::eDeviceLocal)
+			if ((typeBits & 1) == 1)
 			{
-				depthMemoryTypeIndex = i;
-				break;
+				if ((gpuMemoryProps.memoryTypes[i].propertyFlags & properties) == properties)
+				{
+					return i;
+				}
 			}
+			typeBits >>= 1;
 		}
-		typeBits >>= 1;
-	}
+	};
 
 	auto depthMemory = device.allocateMemory(
-		vk::MemoryAllocateInfo(depthMemoryReq.size, depthMemoryTypeIndex)
+		vk::MemoryAllocateInfo(
+			depthMemoryReq.size,
+			getMemoryTypeIndex(depthMemoryReq.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal)
+		)
 	);
 
 
@@ -664,37 +675,422 @@ int main(const int argc, const char *argv[])
 			descriptorSetLayouts.data()
 		)
 	);
+#pragma endregion
+
+#pragma region VertexBuffer
+
+	struct Vertex
+	{
+		float position[3];
+		float color[3];
+	};
+
+	// Vertex buffer and attributes
+	struct {
+		vk::DeviceMemory memory;															// Handle to the device memory for this buffer
+		vk::Buffer buffer;																// Handle to the Vulkan buffer object that the memory is bound to
+		vk::PipelineVertexInputStateCreateInfo inputState;
+		vk::VertexInputBindingDescription inputBinding;
+		std::vector<vk::VertexInputAttributeDescription> inputAttributes;
+	} vertices;
+
+	// Index buffer
+	struct
+	{
+		vk::DeviceMemory memory;
+		vk::Buffer buffer;
+		uint32_t count;
+	} indices;
+
+	// Uniform block object
+	struct {
+		vk::DeviceMemory memory;
+		vk::Buffer buffer;
+		vk::DescriptorBufferInfo descriptor;
+	}  uniformDataVS;
+
+	// For simplicity we use the same uniform block layout as in the shader:
+	//
+	//	layout(set = 0, binding = 0) uniform UBO
+	//	{
+	//		mat4 projectionMatrix;
+	//		mat4 modelMatrix;
+	//		mat4 viewMatrix;
+	//	} ubo;
+	//
+	// This way we can just memcopy the ubo data to the ubo
+	// Note: You should use data types that align with the GPU in order to avoid manual padding (vec4, mat4)
+	struct {
+		glm::mat4 projectionMatrix;
+		glm::mat4 modelMatrix;
+		glm::mat4 viewMatrix;
+	} uboVS;
+
+	// Setup vertices data
+	std::vector<Vertex> vertexBuffer =
+	{
+		{ { 1.0f,  1.0f, 0.0f },{ 1.0f, 0.0f, 0.0f } },
+		{ { -1.0f,  1.0f, 0.0f },{ 0.0f, 1.0f, 0.0f } },
+		{ { 0.0f, -1.0f, 0.0f },{ 0.0f, 0.0f, 1.0f } }
+	};
+
+	uint32_t vertexBufferSize = static_cast<uint32_t>(vertexBuffer.size()) * sizeof(Vertex);
+
+	// Setup indices data
+	std::vector<uint32_t> indexBuffer = { 0, 1, 2 };
+	indices.count = static_cast<uint32_t>(indexBuffer.size());
+	uint32_t indexBufferSize = indices.count * sizeof(uint32_t);
+
+	void *data;
+	// Static data like vertex and index buffer should be stored on the device memory 
+	// for optimal (and fastest) access by the GPU
+	//
+	// To achieve this we use so-called "staging buffers" :
+	// - Create a buffer that's visible to the host (and can be mapped)
+	// - Copy the data to this buffer
+	// - Create another buffer that's local on the device (VRAM) with the same size
+	// - Copy the data from the host to the device using a command buffer
+	// - Delete the host visible (staging) buffer
+	// - Use the device local buffers for rendering
+
+	struct StagingBuffer {
+		vk::DeviceMemory memory;
+		vk::Buffer buffer;
+	};
+
+	struct {
+		StagingBuffer vertices;
+		StagingBuffer indices;
+	} stagingBuffers;
+
+	// Vertex buffer
+	stagingBuffers.vertices.buffer = device.createBuffer(
+		vk::BufferCreateInfo(
+			vk::BufferCreateFlags(),
+			vertexBufferSize,
+			vk::BufferUsageFlagBits::eTransferSrc,
+			vk::SharingMode::eExclusive,
+			queueFamilyIndices.size(),
+			queueFamilyIndices.data()
+		)
+	);
+
+	auto memReqs = device.getBufferMemoryRequirements(stagingBuffers.vertices.buffer);
+
+	// Request a host visible memory type that can be used to copy our data do
+	// Also request it to be coherent, so that writes are visible to the GPU right after unmapping the buffer
+	stagingBuffers.vertices.memory = device.allocateMemory(
+		vk::MemoryAllocateInfo(
+			memReqs.size,
+			getMemoryTypeIndex(memReqs.memoryTypeBits, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent)
+		)
+	);
+
+	// Map and copy
+	data = device.mapMemory(stagingBuffers.vertices.memory, 0, memReqs.size, vk::MemoryMapFlags());
+	memcpy(data, vertexBuffer.data(), vertexBufferSize);
+	device.unmapMemory(stagingBuffers.vertices.memory);
+	device.bindBufferMemory(stagingBuffers.vertices.buffer, stagingBuffers.vertices.memory, 0);
+
+	// Create a device local buffer to which the (host local) vertex data will be copied and which will be used for rendering
+	vertices.buffer = device.createBuffer(
+		vk::BufferCreateInfo(
+			vk::BufferCreateFlags(),
+			vertexBufferSize,
+			vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst,
+			vk::SharingMode::eExclusive,
+			queueFamilyIndices.size(),
+			queueFamilyIndices.data()
+		)
+	);
+
+	memReqs = device.getBufferMemoryRequirements(vertices.buffer);
+
+	vertices.memory = device.allocateMemory(
+		vk::MemoryAllocateInfo(
+			memReqs.size,
+			getMemoryTypeIndex(memReqs.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal)
+		)
+	);
+
+	device.bindBufferMemory(vertices.buffer, vertices.memory, 0);
+
+	// Index buffer
+	// Copy index data to a buffer visible to the host (staging buffer)
+	stagingBuffers.indices.buffer = device.createBuffer(
+		vk::BufferCreateInfo(
+			vk::BufferCreateFlags(),
+			indexBufferSize,
+			vk::BufferUsageFlagBits::eTransferSrc,
+			vk::SharingMode::eExclusive,
+			queueFamilyIndices.size(),
+			queueFamilyIndices.data()
+		)
+	);
+	memReqs = device.getBufferMemoryRequirements(stagingBuffers.indices.buffer);
+	stagingBuffers.indices.memory = device.allocateMemory(
+		vk::MemoryAllocateInfo(
+			memReqs.size,
+			getMemoryTypeIndex(memReqs.memoryTypeBits, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent)
+		)
+	);
+
+	data = device.mapMemory(stagingBuffers.indices.memory, 0, indexBufferSize, vk::MemoryMapFlags());
+	memcpy(data, indexBuffer.data(), indexBufferSize);
+	device.unmapMemory(stagingBuffers.indices.memory);
+	device.bindBufferMemory(stagingBuffers.indices.buffer, stagingBuffers.indices.memory, 0);
+
+	// Create destination buffer with device only visibility
+	indices.buffer = device.createBuffer(
+		vk::BufferCreateInfo(
+			vk::BufferCreateFlags(),
+			indexBufferSize,
+			vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eIndexBuffer,
+			vk::SharingMode::eExclusive,
+			0,
+			nullptr
+		)
+	);
+
+	memReqs = device.getBufferMemoryRequirements(indices.buffer);
+	indices.memory = device.allocateMemory(
+		vk::MemoryAllocateInfo(
+			memReqs.size,
+			getMemoryTypeIndex(memReqs.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal
+			)
+		)
+	);
+
+	device.bindBufferMemory(indices.buffer, indices.memory, 0);
+
+	auto getCommandBuffer = [&](bool begin)
+	{
+		vk::CommandBuffer cmdBuffer = device.allocateCommandBuffers(
+			vk::CommandBufferAllocateInfo(
+				commandPool,
+				vk::CommandBufferLevel::ePrimary,
+				1)
+		)[0];
+
+		// If requested, also start the new command buffer
+		if (begin)
+		{
+			cmdBuffer.begin(
+				vk::CommandBufferBeginInfo()
+			);
+		}
+
+		return cmdBuffer;
+	};
+
+	// Buffer copies have to be submitted to a queue, so we need a command buffer for them
+	// Note: Some devices offer a dedicated transfer queue (with only the transfer bit set) that may be faster when doing lots of copies
+	vk::CommandBuffer copyCmd = getCommandBuffer(true);
+
+	// Put buffer region copies into command buffer
+	std::vector<vk::BufferCopy> copyRegions =
+	{
+		vk::BufferCopy(0, 0, vertexBufferSize)
+	};
+
+	// Vertex buffer
+	copyCmd.copyBuffer(stagingBuffers.vertices.buffer, vertices.buffer, copyRegions);
+
+	// Index buffer
+	copyRegions =
+	{
+		vk::BufferCopy(0, 0,  indexBufferSize)
+	};
+
+	copyCmd.copyBuffer(stagingBuffers.indices.buffer, indices.buffer, copyRegions);
+
+	// Flushing the command buffer will also submit it to the queue and uses a fence to ensure that all commands have been executed before returning
+	auto flushCommandBuffer = [&](vk::CommandBuffer commandBuffer)
+	{
+		commandBuffer.end();
+
+		std::vector<vk::SubmitInfo> submitInfos = {
+			vk::SubmitInfo(0, nullptr, nullptr, 1, &commandBuffer, 0, nullptr)
+		};
+
+		// Create fence to ensure that the command buffer has finished executing
+		vk::Fence fence = device.createFence(vk::FenceCreateInfo());
+
+		// Submit to the queue
+		graphicsQueue.submit(submitInfos, fence);
+		// Wait for the fence to signal that command buffer has finished executing
+		device.waitForFences(1, &fence, VK_TRUE, DEFAULT_FENCE_TIMEOUT);
+		device.destroyFence(fence);
+		device.freeCommandBuffers(commandPool, 1, &commandBuffer);
+	};
+
+	flushCommandBuffer(copyCmd);
+
+	// Destroy staging buffers
+	// Note: Staging buffer must not be deleted before the copies have been submitted and executed
+	device.destroyBuffer(stagingBuffers.vertices.buffer);
+	device.freeMemory(stagingBuffers.vertices.memory);
+	device.destroyBuffer(stagingBuffers.indices.buffer);
+	device.freeMemory(stagingBuffers.indices.memory);
+
+
+	// Vertex input binding
+	vertices.inputBinding.binding = 0;
+	vertices.inputBinding.stride = sizeof(Vertex);
+	vertices.inputBinding.inputRate = vk::VertexInputRate::eVertex;
+
+	// Inpute attribute binding describe shader attribute locations and memory layouts
+	// These match the following shader layout (see triangle.vert):
+	//	layout (location = 0) in vec3 inPos;
+	//	layout (location = 1) in vec3 inColor;
+	vertices.inputAttributes.resize(2);
+	// Attribute location 0: Position
+	vertices.inputAttributes[0].binding = 0;
+	vertices.inputAttributes[0].location = 0;
+	vertices.inputAttributes[0].format = vk::Format::eR32G32B32Sfloat;
+	vertices.inputAttributes[0].offset = offsetof(Vertex, position);
+	// Attribute location 1: Color
+	vertices.inputAttributes[1].binding = 0;
+	vertices.inputAttributes[1].location = 1;
+	vertices.inputAttributes[1].format = vk::Format::eR32G32B32Sfloat;
+	vertices.inputAttributes[1].offset = offsetof(Vertex, color);
+
+	// Assign to the vertex input state used for pipeline creation
+	vertices.inputState.flags = vk::PipelineVertexInputStateCreateFlags();
+	vertices.inputState.vertexBindingDescriptionCount = 1;
+	vertices.inputState.pVertexBindingDescriptions = &vertices.inputBinding;
+	vertices.inputState.vertexAttributeDescriptionCount = static_cast<uint32_t>(vertices.inputAttributes.size());
+	vertices.inputState.pVertexAttributeDescriptions = vertices.inputAttributes.data();
+#pragma endregion
+
+#pragma region UniformBuffers
+	// Prepare and initialize a uniform buffer block containing shader uniforms
+	// Single uniforms like in OpenGL are no longer present in Vulkan. All Shader uniforms are passed via uniform buffer blocks
+
+	// Vertex shader uniform buffer block
+	vk::MemoryAllocateInfo allocInfo = {};
+	allocInfo.pNext = nullptr;
+	allocInfo.allocationSize = 0;
+	allocInfo.memoryTypeIndex = 0;
+
+	// Create a new buffer
+	uniformDataVS.buffer = device.createBuffer(
+		vk::BufferCreateInfo(
+			vk::BufferCreateFlags(),
+			sizeof(uboVS),
+			vk::BufferUsageFlagBits::eUniformBuffer
+		)
+	);
+	// Get memory requirements including size, alignment and memory type 
+	memReqs = device.getBufferMemoryRequirements(uniformDataVS.buffer);
+	allocInfo.allocationSize = memReqs.size;
+	// Get the memory type index that supports host visibile memory access
+	// Most implementations offer multiple memory types and selecting the correct one to allocate memory from is crucial
+	// We also want the buffer to be host coherent so we don't have to flush (or sync after every update.
+	// Note: This may affect performance so you might not want to do this in a real world application that updates buffers on a regular base
+	allocInfo.memoryTypeIndex = getMemoryTypeIndex(memReqs.memoryTypeBits, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+	// Allocate memory for the uniform buffer
+	uniformDataVS.memory = device.allocateMemory(allocInfo);
+	// Bind memory to buffer
+	device.bindBufferMemory(uniformDataVS.buffer, uniformDataVS.memory, 0);
+
+	// Store information in the uniform's descriptor that is used by the descriptor set
+	uniformDataVS.descriptor.buffer = uniformDataVS.buffer;
+	uniformDataVS.descriptor.offset = 0;
+	uniformDataVS.descriptor.range = sizeof(uboVS);
+#pragma endregion
+
+#pragma region UpdateUniforms
+
+	float zoom = -2.5f;
+	auto rotation = glm::vec3();
+
+	// Update matrices
+	uboVS.projectionMatrix = glm::perspective(glm::radians(60.0f), (float)width / (float)height, 0.1f, 256.0f);
+
+	uboVS.viewMatrix = glm::translate(glm::mat4(), glm::vec3(0.0f, 0.0f, zoom));
+
+	uboVS.modelMatrix = glm::mat4();
+	uboVS.modelMatrix = glm::rotate(uboVS.modelMatrix, glm::radians(rotation.x), glm::vec3(1.0f, 0.0f, 0.0f));
+	uboVS.modelMatrix = glm::rotate(uboVS.modelMatrix, glm::radians(rotation.y), glm::vec3(0.0f, 1.0f, 0.0f));
+	uboVS.modelMatrix = glm::rotate(uboVS.modelMatrix, glm::radians(rotation.z), glm::vec3(0.0f, 0.0f, 1.0f));
+
+	// Map uniform buffer and update it
+	void *pData;
+	pData = device.mapMemory(uniformDataVS.memory, 0, sizeof(uboVS));
+	memcpy(pData, &uboVS, sizeof(uboVS));
+	device.unmapMemory(uniformDataVS.memory);
 
 #pragma endregion
-	/*
-#pragma region Pipeline
-	std::vector<vk::PushConstantRange> pushConstants = {
 
+#pragma region DescriptorSetUpdate
+	std::vector<vk::WriteDescriptorSet> descriptorWrites =
+	{
+		vk::WriteDescriptorSet(
+			descriptorSets[0],
+			0,
+			0,
+			1,
+			vk::DescriptorType::eUniformBuffer,
+			nullptr,
+			&uniformDataVS.descriptor,
+			nullptr
+			)
 	};
+
+	device.updateDescriptorSets(descriptorWrites, nullptr);
+#pragma endregion
+
+#pragma region LoadShaders
+	static auto readFile = [&](const std::string& filename) {
+		std::ifstream file(filename, std::ios::ate | std::ios::binary);
+		bool exists = (bool)file;
+
+		if (!exists || !file.is_open()) {
+			throw std::runtime_error("failed to open file!");
+		}
+
+		size_t fileSize = (size_t)file.tellg();
+		std::vector<char> buffer(fileSize);
+
+		file.seekg(0);
+		file.read(buffer.data(), fileSize);
+
+		file.close();
+
+		return buffer;
+	};
+
+	auto vertShaderCode = readFile("E:/Portfolio/Apps/raw-vulkan-app/x64/Debug/triangle.vert.spv");
+	auto fragShaderCode = readFile("E:/Portfolio/Apps/raw-vulkan-app/x64/Debug/triangle.frag.spv");
+#pragma endregion
+
+#pragma region Pipeline
 
 	auto pipelineLayout = device.createPipelineLayout(
 		vk::PipelineLayoutCreateInfo(
 			vk::PipelineLayoutCreateFlags(),
 			descriptorSetLayouts.size(),
 			descriptorSetLayouts.data(),
-			pushConstants.size(),
-			pushConstants.data()
+			0,
+			nullptr
 		)
 	);
 
 	auto vertModule = device.createShaderModule(
 		vk::ShaderModuleCreateInfo(
 			vk::ShaderModuleCreateFlags(),
-			0,
-			nullptr
+			vertShaderCode.size(),
+			(uint32_t*) vertShaderCode.data()
 		)
 	);
 
 	auto fragModule = device.createShaderModule(
 		vk::ShaderModuleCreateInfo(
 			vk::ShaderModuleCreateFlags(),
-			0,
-			nullptr)
+			fragShaderCode.size(),
+			(uint32_t*)fragShaderCode.data()
+		)
 	);
 
 	auto pipelineCache = device.createPipelineCache(vk::PipelineCacheCreateInfo());
@@ -716,12 +1112,11 @@ int main(const int argc, const char *argv[])
 		)
 	};
 
-	auto pvi = vk::PipelineVertexInputStateCreateInfo(
-		vk::PipelineVertexInputStateCreateFlags(),
-		0
-	);
+	auto pvi = vertices.inputState;
 
 	auto pia = vk::PipelineInputAssemblyStateCreateInfo(
+		vk::PipelineInputAssemblyStateCreateFlags(),
+		vk::PrimitiveTopology::eTriangleList
 	);
 
 	auto pt = vk::PipelineTessellationStateCreateInfo(
@@ -736,6 +1131,17 @@ int main(const int argc, const char *argv[])
 	);
 
 	auto pr = vk::PipelineRasterizationStateCreateInfo(
+		vk::PipelineRasterizationStateCreateFlags(),
+		VK_FALSE,
+		VK_FALSE,
+		vk::PolygonMode::eFill,
+		vk::CullModeFlagBits::eNone,
+		vk::FrontFace::eCounterClockwise,
+		VK_FALSE,
+		0,
+		0,
+		0,
+		1.0f
 	);
 
 	auto pm = vk::PipelineMultisampleStateCreateInfo(
@@ -747,9 +1153,9 @@ int main(const int argc, const char *argv[])
 
 	auto pds = vk::PipelineDepthStencilStateCreateInfo(
 		vk::PipelineDepthStencilStateCreateFlags(),
-		VK_FALSE,
-		VK_FALSE,
-		vk::CompareOp::eLess,
+		VK_TRUE,
+		VK_TRUE,
+		vk::CompareOp::eLessOrEqual,
 		VK_FALSE,
 		VK_FALSE,
 		vk::StencilOpState(),
@@ -763,11 +1169,11 @@ int main(const int argc, const char *argv[])
 	{
 		vk::PipelineColorBlendAttachmentState(
 			VK_FALSE,
-			vk::BlendFactor::eOne,
+			vk::BlendFactor::eZero,
 			vk::BlendFactor::eOne,
 			vk::BlendOp::eAdd,
-			vk::BlendFactor::eOne,
-			vk::BlendFactor::eOne,
+			vk::BlendFactor::eZero,
+			vk::BlendFactor::eZero,
 			vk::BlendOp::eAdd,
 			vk::ColorComponentFlags(vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA)
 		)
@@ -781,7 +1187,16 @@ int main(const int argc, const char *argv[])
 		colorBlendAttachments.data()
 	);
 
+	std::vector<vk::DynamicState> dynamicStates =
+	{
+		vk::DynamicState::eViewport,
+		vk::DynamicState::eScissor
+	};
+
 	auto pdy = vk::PipelineDynamicStateCreateInfo(
+		vk::PipelineDynamicStateCreateFlags(),
+		dynamicStates.size(),
+		dynamicStates.data()
 	);
 
 	auto graphicsPipeline = device.createGraphicsPipeline(pipelineCache,
@@ -791,7 +1206,7 @@ int main(const int argc, const char *argv[])
 			pipelineShaderStages.data(),
 			&pvi,
 			&pia,
-			&pt,
+			nullptr,
 			&pv,
 			&pr,
 			&pm,
@@ -799,88 +1214,21 @@ int main(const int argc, const char *argv[])
 			&pbs,
 			&pdy,
 			pipelineLayout,
-			renderpass
+			renderpass,
+			0
 		)
 	);
 
 #pragma endregion
-	/*
-#pragma region VertexBuffer
-
-	struct Vertex
-	{
-		float position[3];
-		float color[3];
-	};
-
-	// Vertex buffer and attributes
-	struct {
-		VkDeviceMemory memory;															// Handle to the device memory for this buffer
-		VkBuffer buffer;																// Handle to the Vulkan buffer object that the memory is bound to
-		VkPipelineVertexInputStateCreateInfo inputState;
-		VkVertexInputBindingDescription inputBinding;
-		std::vector<VkVertexInputAttributeDescription> inputAttributes;
-	} vertices;
-
-	// Index buffer
-	struct
-	{
-		VkDeviceMemory memory;
-		VkBuffer buffer;
-		uint32_t count;
-	} indices;
-
-	// Uniform block object
-	struct {
-		VkDeviceMemory memory;
-		VkBuffer buffer;
-		VkDescriptorBufferInfo descriptor;
-	}  uniformDataVS;
-
-	// For simplicity we use the same uniform block layout as in the shader:
-	//
-	//	layout(set = 0, binding = 0) uniform UBO
-	//	{
-	//		mat4 projectionMatrix;
-	//		mat4 modelMatrix;
-	//		mat4 viewMatrix;
-	//	} ubo;
-	//
-	// This way we can just memcopy the ubo data to the ubo
-	// Note: You should use data types that align with the GPU in order to avoid manual padding (vec4, mat4)
-	struct {
-		glm::mat4 projectionMatrix;
-		glm::mat4 modelMatrix;
-		glm::mat4 viewMatrix;
-	} uboVS;
-
-	// Setup vertices
-	std::vector<Vertex> vertexBuffer =
-	{
-		{ { 1.0f,  1.0f, 0.0f },{ 1.0f, 0.0f, 0.0f } },
-		{ { -1.0f,  1.0f, 0.0f },{ 0.0f, 1.0f, 0.0f } },
-		{ { 0.0f, -1.0f, 0.0f },{ 0.0f, 0.0f, 1.0f } }
-	};
-	uint32_t vertexBufferSize = static_cast<uint32_t>(vertexBuffer.size()) * sizeof(Vertex);
-
-	// Setup indices
-	std::vector<uint32_t> indexBuffer = { 0, 1, 2 };
-	indices.count = static_cast<uint32_t>(indexBuffer.size());
-	uint32_t indexBufferSize = indices.count * sizeof(uint32_t);
-
-	device.createBuffer(
-		vk::BufferCreateInfo()
-	);
-#pragma endregion
 
 #pragma region Commands
-
 
 	std::vector<vk::ClearValue> clearValues =
 	{
 		vk::ClearColorValue(
-			std::array<float,4>{0.0f, 0.0f, 0.2f, 1.0f}
-	  )
+			std::array<float,4>{0.2f, 0.2f, 0.2f, 1.0f}
+	  ),
+		vk::ClearDepthStencilValue(1.0f, 0)
 	};
 
 	// From here we can do common GL commands
@@ -913,49 +1261,20 @@ int main(const int argc, const char *argv[])
 			descriptorSets,
 			nullptr
 		);
-
-		//commandBuffers[i].bindVertexBuffers(0, vertexBuffers, offsets);
+		std::array<vk::DeviceSize, 1> offsets = { 0 };
+		commandBuffers[i].bindVertexBuffers(0, 1, &vertices.buffer, offsets.data());
 		commandBuffers[i].bindIndexBuffer(indices.buffer, 0, vk::IndexType::eUint32);
 		commandBuffers[i].drawIndexed(indices.count, 1, 0, 0, 1);
 		commandBuffers[i].endRenderPass();
-		//commandBuffers[i].pipelineBarrier();
 		commandBuffers[i].end();
 	}
 #pragma endregion
 
 #pragma region SubmitCommandBuffers
-	// Create kernels to submit to the queue on a given render pass.
-	auto kernelPipelineStageFlags = vk::PipelineStageFlags::Flags(vk::PipelineStageFlagBits::eAllCommands);
-	auto kernel = vk::SubmitInfo(
-		0U,
-		nullptr,
-		&kernelPipelineStageFlags,
-		commandBuffers.size(),
-		commandBuffers.data(),
-		0U,
-		nullptr
-	);
-	std::vector<vk::SubmitInfo> kernels = {
-		kernel
-	};
-
+	uint32_t currentBuffer = 0;
 	uint32_t imageIndex = 0;
-
-	graphicsQueue.submit(kernels, NULL);
-	graphicsQueue.presentKHR(
-		vk::PresentInfoKHR(
-			0,
-			nullptr,
-			1,
-			&swapchain,
-			&imageIndex,
-			nullptr
-		)
-	);
-
-	//	device.acquireNextImageKHR(swapchain, UINT64_MAX, nullptr, nullptr);
 #pragma endregion
-*/
+
 #pragma region RenderLoop
 	MSG msg;
 	uint64_t frameCounter = 0;
@@ -978,7 +1297,34 @@ int main(const int argc, const char *argv[])
 			break;
 		}
 
-		//render();
+		device.acquireNextImageKHR(swapchain, std::numeric_limits<uint64_t>::max(), presentCompleteSemaphore, nullptr, &currentBuffer);
+		device.waitForFences(1, &waitFences[currentBuffer], VK_TRUE, UINT64_MAX);
+		device.resetFences(1, &waitFences[currentBuffer]);
+
+		// Create kernels to submit to the queue on a given render pass.
+		vk::PipelineStageFlags kernelPipelineStageFlags = vk::PipelineStageFlagBits::eColorAttachmentOutput;
+
+		auto kernel = vk::SubmitInfo(
+			1,
+			&presentCompleteSemaphore,
+			&kernelPipelineStageFlags,
+			1,
+			&commandBuffers[currentBuffer],
+			1,
+			&renderCompleteSemaphore
+		);
+
+		graphicsQueue.submit(1, &kernel, waitFences[currentBuffer]);
+		graphicsQueue.presentKHR(
+			vk::PresentInfoKHR(
+				1,
+				&renderCompleteSemaphore,
+				1,
+				&swapchain,
+				&currentBuffer,
+				nullptr
+			)
+		);
 
 		frameCounter++;
 		auto tEnd = std::chrono::high_resolution_clock::now();
