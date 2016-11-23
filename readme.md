@@ -1,6 +1,8 @@
 # Raw Vulkan App
 
-A primer into vulkan. This cross platform application simply starts Vulkan, creates an image, and saves that image as a file onto the disk.
+![Release][release-img] [![License][license-img]][license-url]
+
+A port of Vulkan's HelloTriangle to [Vulkan-Hpp](https://github.com/KhronosGroup/Vulkan-Hpp), an experiment to try to make the simplest Vulkan application possible.
 
 ## Setup
 
@@ -9,3 +11,7 @@ This project uses [Conan](http://conan.io) as a C++ package manager. Install con
 ```bash
 conan install
 ```
+
+[release-img]: https://img.shields.io/badge/release-1.0.0.0-B46BD6.svg?style=flat-square
+[license-img]: http://img.shields.io/:license-mit-blue.svg?style=flat-square
+[license-url]: https://opensource.org/licenses/MIT
