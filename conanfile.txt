@@ -1,6 +1,6 @@
 [requires]
 glm/0.9.8.0@TimSimpson/testing
-vulkan-sdk/1.0.30.0@alaingalvan/testing
+vulkan-sdk/1.0.33.0@alaingalvan/testing
 
 [generators]
 visual_studio
