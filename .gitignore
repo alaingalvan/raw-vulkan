@@ -1,10 +1,5 @@
-# Conan
-conaninfo.txt
+## Conan
 conanbuildinfo.props
-conanbuildinfo.txt
-*.sln
-*.vcxproj
-*.vcxproj.filters
 
 ### VisualStudio ###
 ## Ignore Visual Studio temporary files, build results, and

@@ -1,0 +1,34 @@
+[settings]
+    arch=x86_64
+    build_type=Release
+    compiler=Visual Studio
+    compiler.runtime=MD
+    compiler.version=14
+    os=Windows
+
+[requires]
+    glm/0.9.8.0
+    vulkan-hpp/1.Y.Z
+    vulkan-sdk/1.Y.Z
+
+[options]
+
+
+[full_settings]
+    arch=x86_64
+    build_type=Release
+    compiler=Visual Studio
+    compiler.runtime=MD
+    compiler.version=14
+    os=Windows
+
+[full_requires]
+    glm/0.9.8.0@TimSimpson/testing:5ab84d6acfe1f23c4fae0ab88f26e3a396351ac9
+    vulkan-hpp/1.0.30.0@alaingalvan/testing:63da998e3642b50bee33f4449826b2d623661505
+    vulkan-sdk/1.0.30.0@alaingalvan/testing:63da998e3642b50bee33f4449826b2d623661505
+
+[full_options]
+
+
+[scope]
+    dev=True
