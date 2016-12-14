@@ -12,7 +12,6 @@
 #define DEFAULT_FENCE_TIMEOUT 100000000000
 #include "windows.h"
 
-#include "stdio.h"
 #include <chrono>
 #include <exception>
 #include <algorithm>
@@ -559,7 +558,7 @@ int main(const int argc, const char *argv[])
 				vk::ImageViewCreateInfo(
 					vk::ImageViewCreateFlags(),
 					swapchainImages[i],
-					vk::ImageViewType::e1D,
+					vk::ImageViewType::e2D,
 					surfaceColorFormat,
 					vk::ComponentMapping(),
 					vk::ImageSubresourceRange(
@@ -1061,8 +1060,8 @@ int main(const int argc, const char *argv[])
 		return buffer;
 	};
 
-	auto vertShaderCode = readFile("E:/Portfolio/Apps/raw-vulkan-app/x64/Debug/triangle.vert.spv");
-	auto fragShaderCode = readFile("E:/Portfolio/Apps/raw-vulkan-app/x64/Debug/triangle.frag.spv");
+	auto vertShaderCode = readFile("C:/Users/Joshua Figuereo/Documents/Visual Studio 2017/Projects/raw-vulkan-examples/assets/triangle.vert.spv");
+	auto fragShaderCode = readFile("C:/Users/Joshua Figuereo/Documents/Visual Studio 2017/Projects/raw-vulkan-examples/assets/triangle.frag.spv");
 #pragma endregion
 
 #pragma region Pipeline

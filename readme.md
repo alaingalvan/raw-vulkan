@@ -47,6 +47,14 @@ Anti-aliasing is a huge topic of interest for graphics research, here we review 
 
 An attempt to generate accurate raytracing using Vulkan's Compute Pipeline to get levels of quality similar to Mitsuba's Physically based renderer. 
 
+### Host vs. Device Memory Benchmark
+
+A comparision of rendering using data in *host visible space* vs data in *device visible* space.
+
+### Pipeline Cache Benchmark
+
+A comparison of continuously regenerated Pipelines vs. the use of pipeline caches. A pipeline cache allows the device to store the pipeline in a binary representation for reuse later in uses of the program. 
+
 [release-img]: https://img.shields.io/badge/release-1.0.0.0-B46BD6.svg?style=flat-square
 [license-img]: http://img.shields.io/:license-mit-blue.svg?style=flat-square
 [license-url]: https://opensource.org/licenses/MIT

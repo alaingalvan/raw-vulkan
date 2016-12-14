@@ -1,7 +1,10 @@
-#include "vulkan/vulkan.hpp"
-#include <glm/glm.hpp>
 #include <fstream>
 #include <vector>
+#include <string>
+#include <iostream>
+
+#include "vulkan/vulkan.hpp"
+#include "glm/glm.hpp"
 
 int main()
 {
@@ -70,14 +73,13 @@ int main()
 
 	// Initialize Devices
 	auto physicalDevices = instance.enumeratePhysicalDevices();
-	auto gpu = physicalDevices[0];
-	auto gpuProps = gpu.getProperties();
-	auto gpuMemoryProps = gpu.getMemoryProperties();
+	auto physicalDevice = physicalDevices[0];
+	auto gpuMemoryProps = physicalDevice.getMemoryProperties();
 
 #pragma endregion
 
 #pragma region LogicalDevice
-	auto gpuExtensions = gpu.enumerateDeviceExtensionProperties();
+	auto physicalDeviceExtensions = physicalDevice.enumerateDeviceExtensionProperties();
 
 	// Init Device Extension/Validation layers
 	std::vector<const char*> wantedDeviceExtensions =
@@ -89,7 +91,7 @@ int main()
 	auto deviceExtensions = std::vector<const char*>();
 
 	for (auto &w : wantedDeviceExtensions) {
-		for (auto &i : gpuExtensions) {
+		for (auto &i : physicalDeviceExtensions) {
 			if (std::string(i.extensionName).compare(w) == 0) {
 				deviceExtensions.emplace_back(w);
 				break;
@@ -97,15 +99,15 @@ int main()
 		}
 	}
 
-	auto gpuLayers = gpu.enumerateDeviceLayerProperties();
+	auto physicalDeviceLayers = physicalDevice.enumerateDeviceLayerProperties();
 
-	std::vector<const char*> wantedDeviceValidationLayers =
+	std::vector<const char*> wantedDeviceLayers =
 	{
 		"VK_LAYER_LUNARG_standard_validation",
 		"VK_LAYER_RENDERDOC_Capture"
 	};
 
-	auto deviceValidationLayers = std::vector<const char*>();
+	auto deviceLayers = std::vector<const char*>();
 
 	for (auto &w : wantedLayers) {
 		for (auto &i : installedLayers) {
@@ -116,14 +118,14 @@ int main()
 		}
 	}
 
-	auto gpuFeatures = gpu.getFeatures();
-	auto gpuQueueProps = gpu.getQueueFamilyProperties();
+	auto physicalDeviceFeatures = physicalDevice.getFeatures();
+	auto physicalDeviceQueueProps = physicalDevice.getQueueFamilyProperties();
 
 	float priority = 0.0;
 	uint32_t graphicsFamilyIndex = 0;
 	auto queueCreateInfos = std::vector<vk::DeviceQueueCreateInfo>();
 
-	for (auto& queuefamily : gpuQueueProps)
+	for (auto& queuefamily : physicalDeviceQueueProps)
 	{
 		if (queuefamily.queueFlags & vk::QueueFlagBits::eGraphics) {
 			// Create a single graphics queue.
@@ -142,23 +144,23 @@ int main()
 
 	}
 
-	auto device = gpu.createDevice(
+	auto logicalDevice = physicalDevice.createDevice(
 		vk::DeviceCreateInfo(
 			vk::DeviceCreateFlags(),
 			queueCreateInfos.size(),
 			queueCreateInfos.data(),
-			deviceValidationLayers.size(),
-			deviceValidationLayers.data(),
+			deviceLayers.size(),
+			deviceLayers.data(),
 			deviceExtensions.size(),
 			deviceExtensions.data(),
-			&gpuFeatures
+			&physicalDeviceFeatures
 		)
 	);
 
 #pragma endregion
 
 #pragma region Queue
-	auto graphicsQueue = device.getQueue(graphicsFamilyIndex, 0);
+	auto graphicsQueue = logicalDevice.getQueue(graphicsFamilyIndex, 0);
 #pragma endregion
 
 #pragma region RenderPass
@@ -166,7 +168,7 @@ int main()
 	{
 		vk::AttachmentDescription(
 			vk::AttachmentDescriptionFlags(),
-			surfaceColorFormat,
+			vk::Format::eB8G8R8A8Unorm,
 			vk::SampleCountFlagBits::e1,
 			vk::AttachmentLoadOp::eClear,
 			vk::AttachmentStoreOp::eStore,
@@ -211,7 +213,7 @@ int main()
 		)
 	};
 
-	auto renderpass = device.createRenderPass(
+	auto renderpass = logicalDevice.createRenderPass(
 		vk::RenderPassCreateInfo(
 			vk::RenderPassCreateFlags(),
 			attachmentDescriptions.size(),
@@ -226,32 +228,34 @@ int main()
 #pragma endregion
 
 #pragma region FrameBuffers
-	// The swapchain handles allocating frame images.
-	auto swapchainImages = device.getSwapchainImagesKHR(swapchain);
+	// Output Image Attributes
+	auto surfaceSize = vk::Extent2D(1280, 720);
+	auto renderSize = vk::Rect2D(vk::Offset2D(), surfaceSize);
+	auto viewport = vk::Viewport(0.0f, 0.0f, surfaceSize.width, surfaceSize.height, 0, 1.0f);
 
-	// Create Depth Image Data
-	auto depthImage = device.createImage(
+	// Create Output Image Data
+	auto outputImage = logicalDevice.createImage(
 		vk::ImageCreateInfo(
 			vk::ImageCreateFlags(),
 			vk::ImageType::e2D,
-			surfaceDepthFormat,
+			vk::Format::eB8G8R8A8Unorm,
 			vk::Extent3D(surfaceSize.width, surfaceSize.height, 1),
 			1,
 			1,
 			vk::SampleCountFlagBits::e1,
 			vk::ImageTiling::eOptimal,
-			vk::ImageUsageFlagBits::eDepthStencilAttachment | vk::ImageUsageFlagBits::eTransferSrc,
+			vk::ImageUsageFlagBits::eColorAttachment,
 			vk::SharingMode::eExclusive,
-			queueFamilyIndices.size(),
-			queueFamilyIndices.data(),
+			0,
+			nullptr,
 			vk::ImageLayout::eUndefined
 		)
 	);
 
-	auto depthMemoryReq = device.getImageMemoryRequirements(depthImage);
+	auto outputMemoryReq = logicalDevice.getImageMemoryRequirements(outputImage);
 
+	// Lambda getMemoryTypeIndex(typebits, properties)
 	// Search through GPU memory properies to see if this can be device local.
-
 	auto getMemoryTypeIndex = [&](uint32_t typeBits, vk::MemoryPropertyFlags properties)
 	{
 		for (uint32_t i = 0; i < gpuMemoryProps.memoryTypeCount; i++)
@@ -267,29 +271,30 @@ int main()
 		}
 	};
 
-	auto depthMemory = device.allocateMemory(
+	// The Image is being rendered in 
+	auto outputMemory = logicalDevice.allocateMemory(
 		vk::MemoryAllocateInfo(
-			depthMemoryReq.size,
-			getMemoryTypeIndex(depthMemoryReq.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal)
+			outputMemoryReq.size,
+			getMemoryTypeIndex(outputMemoryReq.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal)
 		)
 	);
 
 
-	device.bindImageMemory(
-		depthImage,
-		depthMemory,
+	logicalDevice.bindImageMemory(
+		outputImage,
+		outputMemory,
 		0
 	);
 
-	auto depthImageView = device.createImageView(
+	auto outputImageView = logicalDevice.createImageView(
 		vk::ImageViewCreateInfo(
 			vk::ImageViewCreateFlags(),
-			depthImage,
+			outputImage,
 			vk::ImageViewType::e2D,
-			surfaceDepthFormat,
+			vk::Format::eB8G8R8A8Unorm,
 			vk::ComponentMapping(),
 			vk::ImageSubresourceRange(
-				vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil,
+				vk::ImageAspectFlagBits::eColor,
 				0,
 				1,
 				0,
@@ -298,58 +303,22 @@ int main()
 		)
 	);
 
-	struct SwapChainBuffer {
-		vk::Image image;
-		std::array<vk::ImageView, 2> views;
-		vk::Framebuffer frameBuffer;
-	};
-
-	std::vector<SwapChainBuffer> swapchainBuffers;
-	swapchainBuffers.resize(swapchainImages.size());
-
-	for (int i = 0; i < swapchainImages.size(); i++)
-	{
-		swapchainBuffers[i].image = swapchainImages[i];
-
-		// Color
-		swapchainBuffers[i].views[0] =
-			device.createImageView(
-				vk::ImageViewCreateInfo(
-					vk::ImageViewCreateFlags(),
-					swapchainImages[i],
-					vk::ImageViewType::e1D,
-					surfaceColorFormat,
-					vk::ComponentMapping(),
-					vk::ImageSubresourceRange(
-						vk::ImageAspectFlagBits::eColor,
-						0,
-						1,
-						0,
-						1
-					)
-				)
-			);
-
-		// Depth
-		swapchainBuffers[i].views[1] = depthImageView;
-
-		swapchainBuffers[i].frameBuffer = device.createFramebuffer(
-			vk::FramebufferCreateInfo(
-				vk::FramebufferCreateFlags(),
-				renderpass,
-				swapchainBuffers[i].views.size(),
-				swapchainBuffers[i].views.data(),
-				surfaceSize.width,
-				surfaceSize.height,
-				1
-			)
-		);
-	}
+	auto outputFrameBuffer = logicalDevice.createFramebuffer(
+		vk::FramebufferCreateInfo(
+			vk::FramebufferCreateFlags(),
+			renderpass,
+			1,
+			&outputImageView,
+			surfaceSize.width,
+			surfaceSize.height,
+			1
+		)
+	);
 #pragma endregion
 
 #pragma region CommandPool
 
-	auto commandPool = device.createCommandPool(
+	auto commandPool = logicalDevice.createCommandPool(
 		vk::CommandPoolCreateInfo(
 			vk::CommandPoolCreateFlags(vk::CommandPoolCreateFlagBits::eResetCommandBuffer),
 			graphicsFamilyIndex
@@ -357,11 +326,11 @@ int main()
 	);
 
 	// Allocate one buffer for each frame in the Swapchain.
-	auto commandBuffers = device.allocateCommandBuffers(
+	auto commandBuffers = logicalDevice.allocateCommandBuffers(
 		vk::CommandBufferAllocateInfo(
 			commandPool,
 			vk::CommandBufferLevel::ePrimary,
-			swapchainBuffers.size()
+			1
 		)
 	);
 #pragma endregion
@@ -376,44 +345,12 @@ int main()
 
 	// Vertex buffer and attributes
 	struct {
-		vk::DeviceMemory memory;															// Handle to the device memory for this buffer
+		vk::DeviceMemory memory;														// Handle to the device memory for this buffer
 		vk::Buffer buffer;																// Handle to the Vulkan buffer object that the memory is bound to
 		vk::PipelineVertexInputStateCreateInfo inputState;
 		vk::VertexInputBindingDescription inputBinding;
 		std::vector<vk::VertexInputAttributeDescription> inputAttributes;
 	} vertices;
-
-	// Index buffer
-	struct
-	{
-		vk::DeviceMemory memory;
-		vk::Buffer buffer;
-		uint32_t count;
-	} indices;
-
-	// Uniform block object
-	struct {
-		vk::DeviceMemory memory;
-		vk::Buffer buffer;
-		vk::DescriptorBufferInfo descriptor;
-	}  uniformDataVS;
-
-	// For simplicity we use the same uniform block layout as in the shader:
-	//
-	//	layout(set = 0, binding = 0) uniform UBO
-	//	{
-	//		mat4 projectionMatrix;
-	//		mat4 modelMatrix;
-	//		mat4 viewMatrix;
-	//	} ubo;
-	//
-	// This way we can just memcopy the ubo data to the ubo
-	// Note: You should use data types that align with the GPU in order to avoid manual padding (vec4, mat4)
-	struct {
-		glm::mat4 projectionMatrix;
-		glm::mat4 modelMatrix;
-		glm::mat4 viewMatrix;
-	} uboVS;
 
 	// Setup vertices data
 	std::vector<Vertex> vertexBuffer =
@@ -425,22 +362,7 @@ int main()
 
 	uint32_t vertexBufferSize = static_cast<uint32_t>(vertexBuffer.size()) * sizeof(Vertex);
 
-	// Setup indices data
-	std::vector<uint32_t> indexBuffer = { 0, 1, 2 };
-	indices.count = static_cast<uint32_t>(indexBuffer.size());
-	uint32_t indexBufferSize = indices.count * sizeof(uint32_t);
-
 	void *data;
-	// Static data like vertex and index buffer should be stored on the device memory 
-	// for optimal (and fastest) access by the GPU
-	//
-	// To achieve this we use so-called "staging buffers" :
-	// - Create a buffer that's visible to the host (and can be mapped)
-	// - Copy the data to this buffer
-	// - Create another buffer that's local on the device (VRAM) with the same size
-	// - Copy the data from the host to the device using a command buffer
-	// - Delete the host visible (staging) buffer
-	// - Use the device local buffers for rendering
 
 	struct StagingBuffer {
 		vk::DeviceMemory memory;
@@ -453,22 +375,22 @@ int main()
 	} stagingBuffers;
 
 	// Vertex buffer
-	stagingBuffers.vertices.buffer = device.createBuffer(
+	stagingBuffers.vertices.buffer = logicalDevice.createBuffer(
 		vk::BufferCreateInfo(
 			vk::BufferCreateFlags(),
 			vertexBufferSize,
 			vk::BufferUsageFlagBits::eTransferSrc,
 			vk::SharingMode::eExclusive,
-			queueFamilyIndices.size(),
-			queueFamilyIndices.data()
+			0,
+			nullptr
 		)
 	);
 
-	auto memReqs = device.getBufferMemoryRequirements(stagingBuffers.vertices.buffer);
+	auto memReqs = logicalDevice.getBufferMemoryRequirements(stagingBuffers.vertices.buffer);
 
 	// Request a host visible memory type that can be used to copy our data do
 	// Also request it to be coherent, so that writes are visible to the GPU right after unmapping the buffer
-	stagingBuffers.vertices.memory = device.allocateMemory(
+	stagingBuffers.vertices.memory = logicalDevice.allocateMemory(
 		vk::MemoryAllocateInfo(
 			memReqs.size,
 			getMemoryTypeIndex(memReqs.memoryTypeBits, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent)
@@ -476,152 +398,33 @@ int main()
 	);
 
 	// Map and copy
-	data = device.mapMemory(stagingBuffers.vertices.memory, 0, memReqs.size, vk::MemoryMapFlags());
+	data = logicalDevice.mapMemory(stagingBuffers.vertices.memory, 0, memReqs.size, vk::MemoryMapFlags());
 	memcpy(data, vertexBuffer.data(), vertexBufferSize);
-	device.unmapMemory(stagingBuffers.vertices.memory);
-	device.bindBufferMemory(stagingBuffers.vertices.buffer, stagingBuffers.vertices.memory, 0);
+	logicalDevice.unmapMemory(stagingBuffers.vertices.memory);
+	logicalDevice.bindBufferMemory(stagingBuffers.vertices.buffer, stagingBuffers.vertices.memory, 0);
 
 	// Create a device local buffer to which the (host local) vertex data will be copied and which will be used for rendering
-	vertices.buffer = device.createBuffer(
+	vertices.buffer = logicalDevice.createBuffer(
 		vk::BufferCreateInfo(
 			vk::BufferCreateFlags(),
 			vertexBufferSize,
 			vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst,
-			vk::SharingMode::eExclusive,
-			queueFamilyIndices.size(),
-			queueFamilyIndices.data()
-		)
-	);
-
-	memReqs = device.getBufferMemoryRequirements(vertices.buffer);
-
-	vertices.memory = device.allocateMemory(
-		vk::MemoryAllocateInfo(
-			memReqs.size,
-			getMemoryTypeIndex(memReqs.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal)
-		)
-	);
-
-	device.bindBufferMemory(vertices.buffer, vertices.memory, 0);
-
-	// Index buffer
-	// Copy index data to a buffer visible to the host (staging buffer)
-	stagingBuffers.indices.buffer = device.createBuffer(
-		vk::BufferCreateInfo(
-			vk::BufferCreateFlags(),
-			indexBufferSize,
-			vk::BufferUsageFlagBits::eTransferSrc,
-			vk::SharingMode::eExclusive,
-			queueFamilyIndices.size(),
-			queueFamilyIndices.data()
-		)
-	);
-	memReqs = device.getBufferMemoryRequirements(stagingBuffers.indices.buffer);
-	stagingBuffers.indices.memory = device.allocateMemory(
-		vk::MemoryAllocateInfo(
-			memReqs.size,
-			getMemoryTypeIndex(memReqs.memoryTypeBits, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent)
-		)
-	);
-
-	data = device.mapMemory(stagingBuffers.indices.memory, 0, indexBufferSize, vk::MemoryMapFlags());
-	memcpy(data, indexBuffer.data(), indexBufferSize);
-	device.unmapMemory(stagingBuffers.indices.memory);
-	device.bindBufferMemory(stagingBuffers.indices.buffer, stagingBuffers.indices.memory, 0);
-
-	// Create destination buffer with device only visibility
-	indices.buffer = device.createBuffer(
-		vk::BufferCreateInfo(
-			vk::BufferCreateFlags(),
-			indexBufferSize,
-			vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eIndexBuffer,
 			vk::SharingMode::eExclusive,
 			0,
 			nullptr
 		)
 	);
 
-	memReqs = device.getBufferMemoryRequirements(indices.buffer);
-	indices.memory = device.allocateMemory(
+	memReqs = logicalDevice.getBufferMemoryRequirements(vertices.buffer);
+
+	vertices.memory = logicalDevice.allocateMemory(
 		vk::MemoryAllocateInfo(
 			memReqs.size,
-			getMemoryTypeIndex(memReqs.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal
-			)
+			getMemoryTypeIndex(memReqs.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal)
 		)
 	);
 
-	device.bindBufferMemory(indices.buffer, indices.memory, 0);
-
-	auto getCommandBuffer = [&](bool begin)
-	{
-		vk::CommandBuffer cmdBuffer = device.allocateCommandBuffers(
-			vk::CommandBufferAllocateInfo(
-				commandPool,
-				vk::CommandBufferLevel::ePrimary,
-				1)
-		)[0];
-
-		// If requested, also start the new command buffer
-		if (begin)
-		{
-			cmdBuffer.begin(
-				vk::CommandBufferBeginInfo()
-			);
-		}
-
-		return cmdBuffer;
-	};
-
-	// Buffer copies have to be submitted to a queue, so we need a command buffer for them
-	// Note: Some devices offer a dedicated transfer queue (with only the transfer bit set) that may be faster when doing lots of copies
-	vk::CommandBuffer copyCmd = getCommandBuffer(true);
-
-	// Put buffer region copies into command buffer
-	std::vector<vk::BufferCopy> copyRegions =
-	{
-		vk::BufferCopy(0, 0, vertexBufferSize)
-	};
-
-	// Vertex buffer
-	copyCmd.copyBuffer(stagingBuffers.vertices.buffer, vertices.buffer, copyRegions);
-
-	// Index buffer
-	copyRegions =
-	{
-		vk::BufferCopy(0, 0,  indexBufferSize)
-	};
-
-	copyCmd.copyBuffer(stagingBuffers.indices.buffer, indices.buffer, copyRegions);
-
-	// Flushing the command buffer will also submit it to the queue and uses a fence to ensure that all commands have been executed before returning
-	auto flushCommandBuffer = [&](vk::CommandBuffer commandBuffer)
-	{
-		commandBuffer.end();
-
-		std::vector<vk::SubmitInfo> submitInfos = {
-			vk::SubmitInfo(0, nullptr, nullptr, 1, &commandBuffer, 0, nullptr)
-		};
-
-		// Create fence to ensure that the command buffer has finished executing
-		vk::Fence fence = device.createFence(vk::FenceCreateInfo());
-
-		// Submit to the queue
-		graphicsQueue.submit(submitInfos, fence);
-		// Wait for the fence to signal that command buffer has finished executing
-		device.waitForFences(1, &fence, VK_TRUE, DEFAULT_FENCE_TIMEOUT);
-		device.destroyFence(fence);
-		device.freeCommandBuffers(commandPool, 1, &commandBuffer);
-	};
-
-	flushCommandBuffer(copyCmd);
-
-	// Destroy staging buffers
-	// Note: Staging buffer must not be deleted before the copies have been submitted and executed
-	device.destroyBuffer(stagingBuffers.vertices.buffer);
-	device.freeMemory(stagingBuffers.vertices.memory);
-	device.destroyBuffer(stagingBuffers.indices.buffer);
-	device.freeMemory(stagingBuffers.indices.memory);
-
+	logicalDevice.bindBufferMemory(vertices.buffer, vertices.memory, 0);
 
 	// Vertex input binding
 	vertices.inputBinding.binding = 0;
@@ -632,24 +435,20 @@ int main()
 	// These match the following shader layout (see triangle.vert):
 	//	layout (location = 0) in vec3 inPos;
 	//	layout (location = 1) in vec3 inColor;
-	vertices.inputAttributes.resize(2);
-	// Attribute location 0: Position
-	vertices.inputAttributes[0].binding = 0;
-	vertices.inputAttributes[0].location = 0;
-	vertices.inputAttributes[0].format = vk::Format::eR32G32B32Sfloat;
-	vertices.inputAttributes[0].offset = offsetof(Vertex, position);
-	// Attribute location 1: Color
-	vertices.inputAttributes[1].binding = 0;
-	vertices.inputAttributes[1].location = 1;
-	vertices.inputAttributes[1].format = vk::Format::eR32G32B32Sfloat;
-	vertices.inputAttributes[1].offset = offsetof(Vertex, color);
+
+	vertices.inputAttributes = {
+		{0, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, position)},
+		{0, 1, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, color)}
+	};
 
 	// Assign to the vertex input state used for pipeline creation
-	vertices.inputState.flags = vk::PipelineVertexInputStateCreateFlags();
-	vertices.inputState.vertexBindingDescriptionCount = 1;
-	vertices.inputState.pVertexBindingDescriptions = &vertices.inputBinding;
-	vertices.inputState.vertexAttributeDescriptionCount = static_cast<uint32_t>(vertices.inputAttributes.size());
-	vertices.inputState.pVertexAttributeDescriptions = vertices.inputAttributes.data();
+	vertices.inputState = vk::PipelineVertexInputStateCreateInfo(
+		vk::PipelineVertexInputStateCreateFlags(),
+		1,
+		&vertices.inputBinding,
+		vertices.inputAttributes.size(),
+		vertices.inputAttributes.data()
+	);
 #pragma endregion
 
 #pragma region LoadShaders
@@ -672,31 +471,31 @@ int main()
 		return buffer;
 	};
 
-	auto vertShaderCode = readFile("E:/Portfolio/Apps/raw-vulkan-app/x64/Debug/triangle.vert.spv");
-	auto fragShaderCode = readFile("E:/Portfolio/Apps/raw-vulkan-app/x64/Debug/triangle.frag.spv");
+	auto vertShaderCode = readFile("C:/Users/Joshua Figuereo/Documents/Visual Studio 2017/Projects/raw-vulkan-examples/assets/bitmap.vert.spv");
+	auto fragShaderCode = readFile("C:/Users/Joshua Figuereo/Documents/Visual Studio 2017/Projects/raw-vulkan-examples/assets/bitmap.frag.spv");
 #pragma endregion
 
 #pragma region Pipeline
 
-	auto pipelineLayout = device.createPipelineLayout(
+	auto pipelineLayout = logicalDevice.createPipelineLayout(
 		vk::PipelineLayoutCreateInfo(
 			vk::PipelineLayoutCreateFlags(),
-			descriptorSetLayouts.size(),
-			descriptorSetLayouts.data(),
+			0,
+			nullptr,
 			0,
 			nullptr
 		)
 	);
 
-	auto vertModule = device.createShaderModule(
+	auto vertModule = logicalDevice.createShaderModule(
 		vk::ShaderModuleCreateInfo(
 			vk::ShaderModuleCreateFlags(),
 			vertShaderCode.size(),
-			(uint32_t*) vertShaderCode.data()
+			(uint32_t*)vertShaderCode.data()
 		)
 	);
 
-	auto fragModule = device.createShaderModule(
+	auto fragModule = logicalDevice.createShaderModule(
 		vk::ShaderModuleCreateInfo(
 			vk::ShaderModuleCreateFlags(),
 			fragShaderCode.size(),
@@ -704,7 +503,7 @@ int main()
 		)
 	);
 
-	auto pipelineCache = device.createPipelineCache(vk::PipelineCacheCreateInfo());
+	auto pipelineCache = logicalDevice.createPipelineCache(vk::PipelineCacheCreateInfo());
 
 	std::vector<vk::PipelineShaderStageCreateInfo> pipelineShaderStages = {
 		vk::PipelineShaderStageCreateInfo(
@@ -735,10 +534,10 @@ int main()
 
 	auto pv = vk::PipelineViewportStateCreateInfo(
 		vk::PipelineViewportStateCreateFlagBits(),
-		viewports.size(),
-		viewports.data(),
-		scissors.size(),
-		scissors.data()
+		1,
+		&viewport,
+		1,
+		&renderSize
 	);
 
 	auto pr = vk::PipelineRasterizationStateCreateInfo(
@@ -810,7 +609,7 @@ int main()
 		dynamicStates.data()
 	);
 
-	auto graphicsPipeline = device.createGraphicsPipeline(pipelineCache,
+	auto graphicsPipeline = logicalDevice.createGraphicsPipeline(pipelineCache,
 		vk::GraphicsPipelineCreateInfo(
 			vk::PipelineCreateFlags(vk::PipelineCreateFlagBits::eDerivative),
 			pipelineShaderStages.size(),
@@ -837,50 +636,137 @@ int main()
 	std::vector<vk::ClearValue> clearValues =
 	{
 		vk::ClearColorValue(
-			std::array<float,4>{0.2f, 0.2f, 0.2f, 1.0f}
-	  ),
-		vk::ClearDepthStencilValue(1.0f, 0)
+			std::array<float,4>{0.5f, 0.5f, 0.5f, 1.0f}
+	  )
 	};
 
 	// From here we can do common GL commands
 	// Lets add commands to each command buffer.
-	for (int32_t i = 0; i < commandBuffers.size(); ++i)
-	{
-		commandBuffers[i].begin(vk::CommandBufferBeginInfo());
-		commandBuffers[i].beginRenderPass(
-			vk::RenderPassBeginInfo(
-				renderpass,
-				swapchainBuffers[i].frameBuffer,
-				renderArea,
-				clearValues.size(),
-				clearValues.data()
-			),
-			vk::SubpassContents::eInline
-		);
+	commandBuffers[0].begin(vk::CommandBufferBeginInfo());
+	commandBuffers[0].beginRenderPass(
+		vk::RenderPassBeginInfo(
+			renderpass,
+			outputFrameBuffer,
+			renderSize,
+			clearValues.size(),
+			clearValues.data()
+		),
+		vk::SubpassContents::eInline
+	);
 
-		commandBuffers[i].setViewport(0, viewports);
+	commandBuffers[0].setViewport(0, 1, &viewport);
+	commandBuffers[0].setScissor(0, 1, &renderSize);
+	commandBuffers[0].bindPipeline(vk::PipelineBindPoint::eGraphics, graphicsPipeline);
 
-		commandBuffers[i].setScissor(0, scissors);
+	std::array<vk::DeviceSize, 1> offsets = { 0 };
+	commandBuffers[0].bindVertexBuffers(0, 1, &vertices.buffer, offsets.data());
+	commandBuffers[0].draw(3, 1, 0, 0);
+	commandBuffers[0].endRenderPass();
+	commandBuffers[0].end();
 
-		// Bind Descriptor Sets, these are attribute/uniform "descriptions"
-		commandBuffers[i].bindPipeline(vk::PipelineBindPoint::eGraphics, graphicsPipeline);
-
-		commandBuffers[i].bindDescriptorSets(
-			vk::PipelineBindPoint::eGraphics,
-			pipelineLayout,
-			0,
-			descriptorSets,
-			nullptr
-		);
-		std::array<vk::DeviceSize, 1> offsets = { 0 };
-		commandBuffers[i].bindVertexBuffers(0, 1, &vertices.buffer, offsets.data());
-		commandBuffers[i].draw();
-		commandBuffers[i].endRenderPass();
-		commandBuffers[i].end();
-	}
 #pragma endregion
 
-	device.waitIdle();
+#pragma region SaveToFile
+	auto outputImageSize = logicalDevice.getImageMemoryRequirements(outputImage);
+
+	auto outputBuffer = logicalDevice.createBuffer(
+		vk::BufferCreateInfo(
+			vk::BufferCreateFlags(),
+			outputImageSize.size,
+			vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eStorageBuffer,
+			vk::SharingMode::eExclusive,
+			0,
+			nullptr
+		)
+	);
+
+	auto outputBufferMemory = logicalDevice.allocateMemory(
+		vk::MemoryAllocateInfo(
+			outputImageSize.size,
+			getMemoryTypeIndex(memReqs.memoryTypeBits, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent)
+		)
+	);
+
+	logicalDevice.bindBufferMemory(outputBuffer, outputBufferMemory, 0);
+
+	std::vector<vk::BufferImageCopy> copyRegions =
+	{
+		vk::BufferImageCopy(
+			outputImageSize.alignment,
+			renderSize.extent.width,
+			renderSize.extent.height,
+			vk::ImageSubresourceLayers(),
+			vk::Offset3D(),
+			vk::Extent3D(renderSize.extent.width, renderSize.extent.height, 1)
+)
+	};
+
+	// Copy output buffer to host local memory.
+	logicalDevice.waitIdle();
+	commandBuffers[0].reset(vk::CommandBufferResetFlagBits::eReleaseResources);
+	commandBuffers[0].copyImageToBuffer(outputImage, vk::ImageLayout(), outputBuffer, copyRegions);
+
+	// Wait for every task on the GPU to finish
+	logicalDevice.waitIdle();
+
+	data = logicalDevice.mapMemory(outputMemory, 0, memReqs.size, vk::MemoryMapFlags());
+
+	// Interate on every byte of the image data and write it to a file.
+
+	typedef unsigned char byte;
+
+	typedef struct
+	{
+		byte red, green, blue;
+	}
+	RGB_t;
+
+	// It is presumed that the image is stored in memory as 
+	//   RGB_t data[ height ][ width ]
+	// where lines are top to bottom and columns are left to right
+	// (the same way you view the image on the display)
+
+	// The routine makes all the appropriate adjustments to match the TGA format specification.
+
+	auto write_truecolor_tga = [](const std::string& filename, RGB_t* data, uint32_t width, uint32_t height)
+	{
+		std::ofstream tgafile(filename.c_str(), std::ios::binary);
+		if (!tgafile) return false;
+
+		// The image header
+		byte header[18] = { 0 };
+		header[2] = 1;  // truecolor
+		header[12] = width & 0xFF;
+		header[13] = (width >> 8) & 0xFF;
+		header[14] = height & 0xFF;
+		header[15] = (height >> 8) & 0xFF;
+		header[16] = 24;  // bits per pixel
+
+		tgafile.write((const char*)header, 18);
+
+		// The image data is stored bottom-to-top, left-to-right
+		for (int y = height - 1; y >= 0; y--)
+			for (int x = 0; x < width; x++)
+			{
+				tgafile.put((char)data[(y * width) + x].blue);
+				tgafile.put((char)data[(y * width) + x].green);
+				tgafile.put((char)data[(y * width) + x].red);
+			}
+
+		// The file footer. This part is totally optional.
+		static const char footer[26] =
+			"\0\0\0\0"  // no extension area
+			"\0\0\0\0"  // no developer directory
+			"TRUEVISION-XFILE"  // yep, this is a TGA file
+			".";
+		tgafile.write(footer, 26);
+
+		tgafile.close();
+		return true;
+	};
+
+	write_truecolor_tga("output.tga", (RGB_t*)data, surfaceSize.width, surfaceSize.height);
+#pragma endregion
 
 	return 0;
 }
