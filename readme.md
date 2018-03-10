@@ -4,8 +4,6 @@
 
 A number of Vulkan examples developed as exercises to understand the API. Powered by the [LunarG Vulkan SDK](https://vulkan.lunarg.com/), [GLM](https://github.com/g-truc/glm).
 
-> At the moment, only the Hello Triangle is complete!
-
 ## Setup
 
 This project uses [Conan](http://conan.io) as a C++ package manager. Install Conan, [review the Conan docs](http://conanio.readthedocs.io/en/latest/integrations.html) for your IDE's integration, then type the following in a console:
