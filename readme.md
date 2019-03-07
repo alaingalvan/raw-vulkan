@@ -11,16 +11,13 @@ First install [Git](https://git-scm.com/downloads), then open any terminal such 
 
 ```bash
 # 🐑 Clone the repo
-git clone https://github.com/alaingalvan/crosswindow-demos --recurse-submodules
+git clone https://github.com/alaingalvan/raw-vulkan --recurse-submodules
 
 # 💿 go inside the folder
-cd crosswindow-demos
+cd raw-vulkan
 
 # 👯 If you forget to `recurse-submodules` you can always run:
 git submodule update --init
-
-# 🔼 Go inside any demo, like for instance the Hello Triangle folder:
-cd src/04-cross-platform-hello-triangle/
 
 ```
 

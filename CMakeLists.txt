@@ -44,11 +44,11 @@ set_property(
 # Dependencies
 
 # CrossWindow
-add_subdirectory(../../external/crosswindow ${CMAKE_BINARY_DIR}/crosswindow)
+add_subdirectory(external/crosswindow ${CMAKE_BINARY_DIR}/crosswindow)
 set_property(TARGET CrossWindow PROPERTY FOLDER "Dependencies")
 
 # CrossWindow-Graphics
-add_subdirectory(../../external/crosswindow-graphics ${CMAKE_BINARY_DIR}/crosswindow-graphics)
+add_subdirectory(external/crosswindow-graphics ${CMAKE_BINARY_DIR}/crosswindow-graphics)
 
 # Cross Graphics Dependencies
 if(XGFX_API STREQUAL "VULKAN")
@@ -72,16 +72,6 @@ if(XGFX_API STREQUAL "VULKAN")
             "$ENV{VULKAN_SDK}/Bin32"
             "$ENV{VK_SDK_PATH}/Bin32")
     endif()
-elseif(XGFX_API STREQUAL "OPENGL")
-    add_subdirectory(../../external/glad ${CMAKE_BINARY_DIR}/glad)
-    target_include_directories(
-        Glad
-        PUBLIC ../../external/opengl-registry/api
-    )
-    set(XGFX_LIBRARY Glad)
-    set_property(TARGET Glad PROPERTY FOLDER "Dependencies")
-elseif(XGFX_API STREQUAL "METAL")
-    find_library(XGFX_LIBRARY Metal)
 endif()
 
 
@@ -127,7 +117,7 @@ target_link_libraries(
 
 target_include_directories(
   ${PROJECT_NAME}
-  PUBLIC "../../external/vectormath"
+  PUBLIC "external/vectormath"
   PUBLIC ${VULKAN_INCLUDE_DIR}
 )
 
