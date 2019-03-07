@@ -1,0 +1,9 @@
+[submodule "external/CrossWindow"]
+	path = external/CrossWindow
+	url = https://github.com/alaingalvan/CrossWindow.git
+[submodule "external/CrossWindow-Graphics"]
+	path = external/CrossWindow-Graphics
+	url = https://github.com/alaingalvan/CrossWindow-Graphics.git
+[submodule "external/vectormath"]
+	path = external/vectormath
+	url = https://github.com/glampert/vectormath.git
