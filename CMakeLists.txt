@@ -2,7 +2,7 @@
 
 cmake_minimum_required(VERSION 3.6 FATAL_ERROR)
 cmake_policy(VERSION 3.6)
-project(HelloTriangle
+project(RawVulkan
         VERSION 1.0.0.0
         LANGUAGES C CXX
 )
@@ -74,6 +74,55 @@ if(XGFX_API STREQUAL "VULKAN")
     endif()
 endif()
 
+# IMGUI
+set(
+  IMGUI_SOURCES
+  ${CMAKE_CURRENT_SOURCE_DIR}/external/imgui/imgui.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/external/imgui/imgui_draw.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/external/imgui/examples/imgui_impl_vulkan.cpp
+)
+add_library(
+  IMGUI
+  "${IMGUI_SOURCES}"
+)
+
+target_include_directories(
+  IMGUI
+  PUBLIC "exteral/stb"
+  PUBLIC "external/imgui"
+)
+
+set_property(TARGET IMGUI PROPERTY FOLDER "Dependencies")
+
+# TinyEXR
+add_library(
+  TinyEXR
+  ${CMAKE_CURRENT_SOURCE_DIR}/external/tinyexr/tinyexr.cc
+)
+
+target_include_directories(
+  TinyEXR
+  PUBLIC "external/tinyexr"
+)
+
+set_property(TARGET TinyEXR PROPERTY FOLDER "Dependencies")
+
+# Assimp
+set(ASSIMP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(ASSIMP_BUILD_ASSIMP_TOOLS OFF CACHE BOOL "" FORCE)
+set(ASSIMP_LIB_INSTALL_DIR ${CMAKE_BINARY_DIR}/bin CACHE STRING "" FORCE)
+if (POLICY CMP0048)
+  # cmake warns if loaded from a min-3.0-required parent dir, so silence the warning:
+  cmake_policy(SET CMP0048 OLD)
+endif()
+add_subdirectory(external/assimp)
+set(ASSIMP_LIBRARY_DIRS "lib/assimp/build/code")
+set(ASSIMP_INCLUDE_DIRS "lib/assimp/include" "lib/assimp/build/include")
+set_property(TARGET assimp uninstall UpdateAssimpLibsDebugSymbolsAndDLLs IrrXML PROPERTY FOLDER "Dependencies/Assimp")
+set_property(TARGET zlib zlibstatic  PROPERTY FOLDER "Dependencies/Zlib")
+set(ZLIB_LIBRARY zlib)
+set(ZLIB_INCLUDE_DIR external/assimp/contrib/zlib)
+
 
 # =============================================================
 
@@ -113,6 +162,7 @@ target_link_libraries(
     ${XGFX_LIBRARY}
     CrossWindowGraphics
     CrossWindow
+    IMGUI
 )
 
 target_include_directories(
