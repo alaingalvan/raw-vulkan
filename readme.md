@@ -1,9 +1,9 @@
-# Raw Vulkan Examples
+# Raw Vulkan
 
 [![cmake-img]][cmake-url]
 [![License][license-img]][license-url]
 
-A number of Vulkan examples developed as exercises to understand the API.
+An example seed project introducing programming a C++ Vulkan application.
 
 ## Getting Started
 
